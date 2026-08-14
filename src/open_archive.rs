@@ -451,7 +451,7 @@ impl OpenArchive<Process, CursorBeforeFile> {
     /// Decompression runs on a background thread; calling `read()` on the
     /// returned `StreamingEntry` blocks until data is available.
     ///
-    /// The bounded channel holds at most 4 chunks (up to 1 MB each), providing
+    /// The bounded channel holds at most 4 chunks (up to 128 KiB each), providing
     /// natural backpressure.
     ///
     /// When done reading, call [`StreamingEntry::finish()`] to reclaim the
@@ -507,9 +507,7 @@ impl OpenArchive<Process, CursorBeforeFile> {
                     }
                     _ => {
                         let err = UnrarError::from(process_result, When::Process);
-                        let _ = tx.send(StreamMessage::Error(
-                            UnrarError::from(err.code, err.when),
-                        ));
+                        let _ = tx.send(StreamMessage::Error(UnrarError::from(err.code, err.when)));
                         Err(err)
                     }
                 }
@@ -597,9 +595,7 @@ fn handle_volume_change(
     p1: native::LPARAM,
     p2: native::LPARAM,
 ) -> c_int {
-    *volume = Some(unsafe {
-        widestring::WideCString::from_ptr_truncate(p1 as *const _, 2048)
-    });
+    *volume = Some(unsafe { widestring::WideCString::from_ptr_truncate(p1 as *const _, 2048) });
     // p2 carries RAR_VOL_ASK (0) or RAR_VOL_NOTIFY (1)
     // Return -1 for ASK (next volume not found), 0 otherwise
     if p2 == native::RAR_VOL_ASK {
@@ -662,7 +658,8 @@ extern "C" fn streaming_callback(
     }
 }
 
-const MAX_CHUNK_SIZE: usize = 1_048_576; // 1 MB transport chunk size.
+/// Transport chunk size used to bound streaming memory and cancellation latency.
+const MAX_CHUNK_SIZE: usize = 128 * 1024;
 
 #[derive(Debug)]
 enum StreamMessage {
@@ -690,7 +687,8 @@ struct StreamingUserdata {
 /// Implements [`std::io::Read`]. Created by [`OpenArchive::read_streaming()`].
 /// Call [`.finish()`](StreamingEntry::finish) when done to reclaim the archive.
 /// If dropped without calling `finish()`, decompression is hard-aborted and the
-/// producer thread is joined with a 5-second timeout.
+/// producer thread is joined before the drop returns. This fail-safe path never
+/// detaches a producer that still owns the native archive handle.
 ///
 /// # Producer panic behavior
 ///
@@ -712,7 +710,10 @@ impl fmt::Debug for StreamingEntry {
         f.debug_struct("StreamingEntry")
             .field("abort", &self.abort.load(Ordering::Relaxed))
             .field("discard", &self.discard.load(Ordering::Relaxed))
-            .field("decompressed_bytes", &self.decompressed_bytes.load(Ordering::Relaxed))
+            .field(
+                "decompressed_bytes",
+                &self.decompressed_bytes.load(Ordering::Relaxed),
+            )
             .field("buffer_len", &self.buffer.len())
             .field("buffer_pos", &self.buffer_pos)
             .field("done", &self.done)
@@ -839,23 +840,7 @@ impl Drop for StreamingEntry {
         self.abort.store(true, Ordering::Relaxed);
         while self.receiver.try_recv().is_ok() {}
         if let Some(handle) = self.join_handle.take() {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                if handle.is_finished() {
-                    let _ = handle.join();
-                    break;
-                }
-                if std::time::Instant::now() >= deadline {
-                    eprintln!(
-                        "[unrar] CRITICAL: streaming producer thread did not exit within 5s \
-                         after abort signal — detaching thread. This leaks a file descriptor \
-                         to the open RAR archive."
-                    );
-                    drop(handle); // Detaches the thread (JoinHandle::drop does not join)
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
+            let _ = handle.join();
         }
     }
 }
@@ -876,9 +861,7 @@ impl<M: ProcessMode> Internal<M> {
         }
         let user_data = unsafe { &mut *(user_data as *mut Userdata<M::Output>) };
         match msg {
-            native::UCM_CHANGEVOLUMEW => {
-                handle_volume_change(&mut user_data.1, p1, p2)
-            }
+            native::UCM_CHANGEVOLUMEW => handle_volume_change(&mut user_data.1, p1, p2),
             native::UCM_PROCESSDATA => {
                 if p2 <= 0 {
                     return 0; // Ignore zero/negative-length chunks
