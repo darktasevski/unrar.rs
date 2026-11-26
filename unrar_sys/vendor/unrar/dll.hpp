@@ -28,6 +28,7 @@
 #define RAR_SKIP              0
 #define RAR_TEST              1
 #define RAR_EXTRACT           2
+#define RAR_TEST_PRIMARY      3
 
 #define RAR_VOL_ASK           0
 #define RAR_VOL_NOTIFY        1

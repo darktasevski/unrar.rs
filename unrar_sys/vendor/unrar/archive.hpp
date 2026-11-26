@@ -75,7 +75,7 @@ class Archive:public File
     void SeekToNext();
     bool CheckAccess();
     bool IsArcDir();
-    void ConvertAttributes();
+    void ConvertAttributes(wchar Command);
     void VolSubtractHeaderSize(size_t SubSize);
     uint FullHeaderSize(size_t Size);
     int64 GetStartPos();

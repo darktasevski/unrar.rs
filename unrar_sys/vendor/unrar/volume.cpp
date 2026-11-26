@@ -151,7 +151,7 @@ bool MergeArchive(Archive &Arc,ComprDataIO *DataIO,bool ShowFileName,wchar Comma
     Arc.ReadHeader();
   if (Arc.GetHeaderType()==HEAD_FILE)
   {
-    Arc.ConvertAttributes();
+    Arc.ConvertAttributes(Command);
     Arc.Seek(Arc.NextBlockPos-Arc.FileHead.PackSize,SEEK_SET);
   }
   if (ShowFileName && !Cmd->DisableNames)

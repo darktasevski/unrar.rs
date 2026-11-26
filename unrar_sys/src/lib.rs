@@ -1,3 +1,14 @@
+// Modified UnRAR source distribution notice (vendor/unrar/license.txt).
+// UnRAR source code may be used in any software to handle
+// RAR archives without limitations free of charge, but cannot be
+// used to develop RAR (WinRAR) compatible archiver and to
+// re-create RAR compression algorithm, which is proprietary.
+// Distribution of modified UnRAR source code in separate form
+// or as a part of other software is permitted, provided that
+// full text of this paragraph, starting from "UnRAR source code"
+// words, is included in license, or in documentation if license
+// is not available, and in source code comments of resulting package.
+
 #![no_std]
 
 #[cfg(feature = "std")]
@@ -64,6 +75,7 @@ pub const ERAR_UNKNOWN: c_int = 21;
 pub const ERAR_MISSING_PASSWORD: c_int = 22;
 pub const ERAR_EREFERENCE: c_int = 23;
 pub const ERAR_BAD_PASSWORD: c_int = 24;
+pub const ERAR_LARGE_DICT: c_int = 25;
 
 pub const RAR_OM_LIST: c_uint = 0;
 pub const RAR_OM_EXTRACT: c_uint = 1;
@@ -72,6 +84,8 @@ pub const RAR_OM_LIST_INCSPLIT: c_uint = 2;
 pub const RAR_SKIP: c_int = 0;
 pub const RAR_TEST: c_int = 1;
 pub const RAR_EXTRACT: c_int = 2;
+/// Test the entry and deliver only its primary file bytes to data callbacks.
+pub const RAR_TEST_PRIMARY: c_int = 3;
 
 pub const RAR_VOL_ASK: LPARAM = 0;
 pub const RAR_VOL_NOTIFY: LPARAM = 1;
@@ -92,6 +106,7 @@ pub const UCM_PROCESSDATA: c_uint = 1;
 pub const UCM_NEEDPASSWORD: c_uint = 2;
 pub const UCM_CHANGEVOLUMEW: c_uint = 3;
 pub const UCM_NEEDPASSWORDW: c_uint = 4;
+pub const UCM_LARGEDICT: c_uint = 5;
 
 // RAROpenArchiveDataEx::Flags
 pub const ROADF_VOLUME: c_uint = 0x0001;

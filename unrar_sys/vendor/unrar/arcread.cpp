@@ -1320,8 +1320,13 @@ bool Archive::IsArcDir()
 }
 
 
-void Archive::ConvertAttributes()
+void Archive::ConvertAttributes(wchar Command)
 {
+#ifdef RARDLL
+  // Only a disk extraction applies these destination permissions.
+  if (Command!='X' && Command!='E')
+    return;
+#endif
 #ifdef _WIN_ALL
   if (FileHead.HSType!=HSYS_WINDOWS)
     FileHead.FileAttr=FileHead.Dir ? 0x10 : 0x20;
@@ -1335,17 +1340,14 @@ void Archive::ConvertAttributes()
   // but we set attributes with chmod later, so we need to calculate
   // resulting attributes here. We do it only for non-Unix archives.
   // We restore native Unix attributes as is, because it can be backup.
-  static mode_t mask = (mode_t) -1;
+  if (FileHead.HSType==HSYS_UNIX)
+    return;
 
-  if (mask == (mode_t) -1)
-  {
-    // umask call returns the current umask value. Argument (022) is not
-    // really important here.
-    mask = umask(022);
-
-    // Restore the original umask value, which was changed to 022 above.
-    umask(mask);
-  }
+  static const mode_t mask=[] {
+    mode_t Current=umask(022);
+    umask(Current);
+    return Current;
+  }();
 
   switch(FileHead.HSType)
   {
@@ -1371,8 +1373,6 @@ void Archive::ConvertAttributes()
             FileHead.FileAttr=0666 & ~mask;
           }
       }
-      break;
-    case HSYS_UNIX:
       break;
     default:
       if (FileHead.Dir)

@@ -10,6 +10,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "list and extract RAR archives"
 repository = "https://github.com/muja/unrar.rs"
+exclude = ["/tests/native_errors.rs", "/tests/native_primary_stream.rs"]
 
 [dependencies]
 regex = "1"
@@ -21,4 +22,5 @@ path = "unrar_sys"
 version = "0.5"
 
 [dev-dependencies]
+unrar-native-tests = { path = "tests/native" }
 tempfile = "3.12.0"

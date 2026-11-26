@@ -84,7 +84,22 @@ Here is an overview of what methods are exposed for the OpenMode/Cursor combinat
 | Open mode↓ ╲ Cursor position→| before header   | before file                                                            |
 |------------------------------|-----------------|------------------------------------------------------------------------|
 | [`List`], [`ListSplit`]      | [`read_header`] | [`skip`]                                                               |
-| [`Process`]                  | [`read_header`] | [`skip`], [`read`], [`extract`], [`extract_to`], [`extract_with_base`] |
+| [`Process`]                  | [`read_header`] | [`skip`], [`read`], [`read_bounded`], [`read_prefix`], [`read_streaming`], [`extract`], [`extract_to`], [`extract_with_base`] |
+
+[`read_bounded`] consumes the selected cursor, calls UnRAR and runs the output callback on
+the calling thread, then closes the archive. UnRAR can use decoder and hash workers.
+The method returns complete primary-file bytes after the integrity check and close
+succeed. A span exceeding the remaining output allowance aborts with
+[`BoundedReadError::LimitExceeded`]. The limit counts retained bytes. The vector's
+capacity and the native decoder's working memory can be larger.
+
+[`read_prefix`] fills a caller-provided buffer with the beginning of the primary file
+and drains the entry on the same thread. It returns the total primary bytes delivered
+and the next-header cursor after integrity checks, preserving the dictionary for later
+solid entries. A short entry leaves the rest of the buffer untouched.
+
+Native dictionary-size refusals return [`error::Code::LargeDict`]. Downstream exhaustive
+matches on [`error::Code`] must include this variant.
 
 ## OpenArchive: Iterator
 
@@ -116,6 +131,9 @@ fn first_file_content<P: AsRef<Path>>(path: P) -> UnrarResult<Vec<u8>> {
 
 [`read_header`]: OpenArchive::read_header
 [`skip`]: OpenArchive::skip
+[`read_streaming`]: OpenArchive::read_streaming
+[`read_bounded`]: OpenArchive::read_bounded
+[`read_prefix`]: OpenArchive::read_prefix
 [`read`]: OpenArchive::read
 [`extract`]: OpenArchive::extract
 [`extract_to`]: OpenArchive::extract_to

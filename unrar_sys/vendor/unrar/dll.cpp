@@ -32,11 +32,10 @@ HANDLE PASCAL RAROpenArchive(struct RAROpenArchiveData *r)
 
 HANDLE PASCAL RAROpenArchiveEx(struct RAROpenArchiveDataEx *r)
 {
+  DllErrorScope Errors;
   DataSet *Data=NULL;
   try
   {
-    ErrHandler.Clean();
-
     r->OpenResult=0;
     Data=new DataSet;
     Data->Cmd.DllError=0;
@@ -165,6 +164,7 @@ HANDLE PASCAL RAROpenArchiveEx(struct RAROpenArchiveDataEx *r)
 
 int PASCAL RARCloseArchive(HANDLE hArcData)
 {
+  DllErrorScope Errors;
   DataSet *Data=(DataSet *)hArcData;
   try
   {
@@ -205,6 +205,7 @@ int PASCAL RARReadHeader(HANDLE hArcData,struct RARHeaderData *D)
 
 int PASCAL RARReadHeaderEx(HANDLE hArcData,struct RARHeaderDataEx *D)
 {
+  DllErrorScope Errors;
   DataSet *Data=(DataSet *)hArcData;
   try
   {
@@ -325,6 +326,7 @@ int PASCAL RARReadHeaderEx(HANDLE hArcData,struct RARHeaderDataEx *D)
 
 int PASCAL ProcessFile(HANDLE hArcData,int Operation,char *DestPath,char *DestName,wchar *DestPathW,wchar *DestNameW)
 {
+  DllErrorScope Errors;
   DataSet *Data=(DataSet *)hArcData;
   try
   {

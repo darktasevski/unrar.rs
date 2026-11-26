@@ -9,7 +9,11 @@ class ArcFileSearch;
 
 class ComprDataIO
 {
+  public:
+    enum class Output { Auxiliary, PrimaryFile };
+
   private:
+    const Output OutputKind;
     void ShowUnpRead(int64 ArcPos,int64 ArcSize);
     void ShowUnpWrite();
 
@@ -49,10 +53,8 @@ class ComprDataIO
 
     int LastPercent;
 
-    wchar CurrentCommand;
-
   public:
-    ComprDataIO();
+    explicit ComprDataIO(Output Kind=Output::Auxiliary);
     ~ComprDataIO();
     void Init();
     int UnpRead(byte *Addr,size_t Count);
@@ -70,7 +72,6 @@ class ComprDataIO
          const byte *Salt,const byte *InitV,uint Lg2Cnt,byte *HashKey,byte *PswCheck);
     void SetCmt13Encryption();
     void SetUnpackToMemory(byte *Addr,uint Size);
-    void SetCurrentCommand(wchar Cmd) {CurrentCommand=Cmd;}
     void AdjustTotalArcSize(Archive *Arc);
 
 

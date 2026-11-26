@@ -1,6 +1,7 @@
 use std::process::Command;
 
 fn main() {
+    println!("cargo:rerun-if-changed=vendor/unrar");
     let target = std::env::var("TARGET").unwrap_or_default();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
@@ -98,6 +99,10 @@ fn main() {
         .define("_LARGEFILE_SOURCE", None)
         .define("RAR_SMP", None)
         .define("RARDLL", None);
+
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        build.flag("/EHsc");
+    }
 
     // Only disable cpp_link_stdlib on Windows GNU where it causes issues
     // On Apple platforms, we need libc++ linked

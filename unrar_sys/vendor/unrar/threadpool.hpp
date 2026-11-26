@@ -59,6 +59,9 @@ class ThreadPool
     uint ThreadsCreatedCount;
 
     uint ActiveThreads;
+#ifdef RARDLL
+    RAR_EXIT WorkerFailure=RARX_SUCCESS;
+#endif
 
   	QueueEntry TaskQueue[MaxPoolThreads];
   	uint QueueTop;

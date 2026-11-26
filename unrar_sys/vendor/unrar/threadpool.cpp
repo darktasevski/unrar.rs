@@ -51,7 +51,10 @@ ThreadPool::ThreadPool(uint MaxThreads)
 
 ThreadPool::~ThreadPool()
 {
+  // A DLL caller may be unwinding. Unstarted tasks can point into its stack.
+#ifndef RARDLL
   WaitDone();
+#endif
   Closing=true;
 
 #ifdef _WIN_ALL
@@ -116,9 +119,26 @@ void ThreadPool::PoolThreadLoop()
   QueueEntry Task;
   while (GetQueuedTask(&Task))
   {
+#ifdef RARDLL
+    DllErrorScope Errors;
+    RAR_EXIT Failure=RARX_SUCCESS;
+    try
+    {
+      Task.Proc(Task.Param);
+      Failure=ErrHandler.GetErrorCode();
+    }
+    catch (RAR_EXIT Code) { Failure=Code; }
+    catch (const std::bad_alloc &) { Failure=RARX_MEMORY; }
+    catch (...) { Failure=RARX_FATAL; }
+#else
     Task.Proc(Task.Param);
-    
-    CriticalSectionStart(&CritSection); 
+#endif
+
+    CriticalSectionStart(&CritSection);
+#ifdef RARDLL
+    if (WorkerFailure==RARX_SUCCESS)
+      WorkerFailure=Failure;
+#endif
     if (--ActiveThreads == 0)
     {
 #ifdef _WIN_ALL
@@ -207,6 +227,13 @@ void ThreadPool::WaitDone()
   while (AnyActive)
     cpthread_cond_wait(&AnyActiveCond,&AnyActiveMutex);
   pthread_mutex_unlock(&AnyActiveMutex);
+#endif
+#ifdef RARDLL
+  // All tasks have settled, so their borrowed arguments can now be unwound.
+  RAR_EXIT Failure=WorkerFailure;
+  WorkerFailure=RARX_SUCCESS;
+  if (Failure!=RARX_SUCCESS)
+    ErrHandler.Throw(Failure);
 #endif
 }
 #endif // RAR_SMP

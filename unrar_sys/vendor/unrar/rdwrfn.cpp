@@ -1,6 +1,6 @@
 #include "rar.hpp"
 
-ComprDataIO::ComprDataIO()
+ComprDataIO::ComprDataIO(Output Kind): OutputKind(Kind)
 {
 #ifndef RAR_NOCRYPT
   Crypt=new CryptData;
@@ -35,7 +35,6 @@ void ComprDataIO::Init()
   LastPercent=-1;
   SubHead=NULL;
   SubHeadPos=NULL;
-  CurrentCommand=0;
   ProcessedArcSize=0;
   LastArcSize=0;
   TotalArcSize=0;
@@ -125,7 +124,7 @@ int ComprDataIO::UnpRead(byte *Addr,size_t Count)
         (ReadSize==0 || Decryption && (TotalRead & CRYPT_BLOCK_MASK) != 0) )
     {
 #ifndef NOVOLUME
-      if (!MergeArchive(*SrcArc,this,true,CurrentCommand))
+      if (!MergeArchive(*SrcArc,this,true,SrcArc->GetCommandData()->Command[0]))
 #endif
       {
         NextVolumeMissing=true;
@@ -156,7 +155,8 @@ void ComprDataIO::UnpWrite(byte *Addr,size_t Count)
 
 #ifdef RARDLL
   CommandData *Cmd=((Archive *)SrcFile)->GetCommandData();
-  if (Cmd->DllOpMode!=RAR_SKIP)
+  if (Cmd->DllOpMode!=RAR_SKIP &&
+      (Cmd->DllOpMode!=RAR_TEST_PRIMARY || OutputKind==Output::PrimaryFile))
   {
     if (Cmd->Callback!=NULL &&
         Cmd->Callback(UCM_PROCESSDATA,Cmd->UserData,(LPARAM)Addr,Count)==-1)

@@ -1,2 +1,6 @@
 target
 Cargo.lock
+
+!/data/bounded-empty.rar
+!/data/bounded-split.part?.rar
+!/data/windows-mode.part?.rar

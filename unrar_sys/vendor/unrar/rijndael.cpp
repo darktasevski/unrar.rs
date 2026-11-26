@@ -7,7 +7,7 @@
 #include <wmmintrin.h>
 #endif
 
-static byte S[256]=
+static constexpr byte S[256]=
 {
    99, 124, 119, 123, 242, 107, 111, 197,  48,   1, 103,  43, 254, 215, 171, 118, 
   202, 130, 201, 125, 250,  89,  71, 240, 173, 212, 162, 175, 156, 164, 114, 192, 
@@ -27,14 +27,52 @@ static byte S[256]=
   140, 161, 137,  13, 191, 230,  66, 104,  65, 153,  45,  15, 176,  84, 187,  22
 };
 
-static byte S5[256];
-
 // Round constants. 10 items are used by AES-128, 8 by AES-192, 7 by AES-256.
 static byte rcon[]={0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36};
 
-static byte T1[256][4],T2[256][4],T3[256][4],T4[256][4];
-static byte T5[256][4],T6[256][4],T7[256][4],T8[256][4];
-static byte U1[256][4],U2[256][4],U3[256][4],U4[256][4];
+static constexpr byte gmul(byte a, byte b) // Galois field "peasant's algorithm" multiplication.
+{
+  const byte poly=0x1b; // Lower byte of AES 0x11b irreducible polynomial.
+  byte result = 0;
+  while (b>0)
+  {
+    if ((b & 1) != 0)
+      result ^= a;
+    a = (a & 0x80) ? (a<<1)^poly : a<<1;
+    b >>= 1;
+  }
+  return result;
+}
+
+struct RijndaelTables
+{
+  byte S5[256]{};
+  byte T1[256][4]{},T2[256][4]{},T3[256][4]{},T4[256][4]{};
+  byte T5[256][4]{},T6[256][4]{},T7[256][4]{},T8[256][4]{};
+  byte U1[256][4]{},U2[256][4]{},U3[256][4]{},U4[256][4]{};
+
+  constexpr RijndaelTables()
+  {
+    for (int I=0;I<256;I++)
+      S5[S[I]]=I;
+
+    for (int I=0;I<256;I++)
+    {
+      byte s=S[I];
+      T1[I][1]=T1[I][2]=T2[I][2]=T2[I][3]=T3[I][0]=T3[I][3]=T4[I][0]=T4[I][1]=s;
+      T1[I][0]=T2[I][1]=T3[I][2]=T4[I][3]=gmul(s,2);
+      T1[I][3]=T2[I][0]=T3[I][1]=T4[I][2]=gmul(s,3);
+
+      byte b=S5[I];
+      U1[b][3]=U2[b][0]=U3[b][1]=U4[b][2]=T5[I][3]=T6[I][0]=T7[I][1]=T8[I][2]=gmul(b,0xb);
+      U1[b][1]=U2[b][2]=U3[b][3]=U4[b][0]=T5[I][1]=T6[I][2]=T7[I][3]=T8[I][0]=gmul(b,0x9);
+      U1[b][2]=U2[b][3]=U3[b][0]=U4[b][1]=T5[I][2]=T6[I][3]=T7[I][0]=T8[I][1]=gmul(b,0xd);
+      U1[b][0]=U2[b][1]=U3[b][2]=U4[b][3]=T5[I][0]=T6[I][1]=T7[I][2]=T8[I][3]=gmul(b,0xe);
+    }
+  }
+};
+
+static constexpr RijndaelTables Tables{};
 
 inline void Xor128(void *dest,const void *arg1,const void *arg2)
 {
@@ -82,8 +120,6 @@ inline void Copy128(byte *dest,const byte *src)
 
 Rijndael::Rijndael()
 {
-  if (S5[0]==0)
-    GenerateTables();
   m_uRounds = 0;
   CBCMode = true; // Always true for RAR.
 #ifdef USE_SSE
@@ -201,36 +237,36 @@ void Rijndael::blockEncrypt(const byte *input,size_t inputLen,byte *outBuffer)
     byte temp[4][4];
 
     Xor128(temp,block,m_expandedKey[0]);
-    Xor128(outBuffer,   T1[temp[0][0]],T2[temp[1][1]],T3[temp[2][2]],T4[temp[3][3]]);
-    Xor128(outBuffer+4, T1[temp[1][0]],T2[temp[2][1]],T3[temp[3][2]],T4[temp[0][3]]);
-    Xor128(outBuffer+8, T1[temp[2][0]],T2[temp[3][1]],T3[temp[0][2]],T4[temp[1][3]]);
-    Xor128(outBuffer+12,T1[temp[3][0]],T2[temp[0][1]],T3[temp[1][2]],T4[temp[2][3]]);
+    Xor128(outBuffer,   Tables.T1[temp[0][0]],Tables.T2[temp[1][1]],Tables.T3[temp[2][2]],Tables.T4[temp[3][3]]);
+    Xor128(outBuffer+4, Tables.T1[temp[1][0]],Tables.T2[temp[2][1]],Tables.T3[temp[3][2]],Tables.T4[temp[0][3]]);
+    Xor128(outBuffer+8, Tables.T1[temp[2][0]],Tables.T2[temp[3][1]],Tables.T3[temp[0][2]],Tables.T4[temp[1][3]]);
+    Xor128(outBuffer+12,Tables.T1[temp[3][0]],Tables.T2[temp[0][1]],Tables.T3[temp[1][2]],Tables.T4[temp[2][3]]);
 
     for(int r = 1; r < m_uRounds-1; r++)
     {
       Xor128(temp,outBuffer,m_expandedKey[r]);
-      Xor128(outBuffer,   T1[temp[0][0]],T2[temp[1][1]],T3[temp[2][2]],T4[temp[3][3]]);
-      Xor128(outBuffer+4, T1[temp[1][0]],T2[temp[2][1]],T3[temp[3][2]],T4[temp[0][3]]);
-      Xor128(outBuffer+8, T1[temp[2][0]],T2[temp[3][1]],T3[temp[0][2]],T4[temp[1][3]]);
-      Xor128(outBuffer+12,T1[temp[3][0]],T2[temp[0][1]],T3[temp[1][2]],T4[temp[2][3]]);
+      Xor128(outBuffer,   Tables.T1[temp[0][0]],Tables.T2[temp[1][1]],Tables.T3[temp[2][2]],Tables.T4[temp[3][3]]);
+      Xor128(outBuffer+4, Tables.T1[temp[1][0]],Tables.T2[temp[2][1]],Tables.T3[temp[3][2]],Tables.T4[temp[0][3]]);
+      Xor128(outBuffer+8, Tables.T1[temp[2][0]],Tables.T2[temp[3][1]],Tables.T3[temp[0][2]],Tables.T4[temp[1][3]]);
+      Xor128(outBuffer+12,Tables.T1[temp[3][0]],Tables.T2[temp[0][1]],Tables.T3[temp[1][2]],Tables.T4[temp[2][3]]);
     }
     Xor128(temp,outBuffer,m_expandedKey[m_uRounds-1]);
-    outBuffer[ 0] = T1[temp[0][0]][1];
-    outBuffer[ 1] = T1[temp[1][1]][1];
-    outBuffer[ 2] = T1[temp[2][2]][1];
-    outBuffer[ 3] = T1[temp[3][3]][1];
-    outBuffer[ 4] = T1[temp[1][0]][1];
-    outBuffer[ 5] = T1[temp[2][1]][1];
-    outBuffer[ 6] = T1[temp[3][2]][1];
-    outBuffer[ 7] = T1[temp[0][3]][1];
-    outBuffer[ 8] = T1[temp[2][0]][1];
-    outBuffer[ 9] = T1[temp[3][1]][1];
-    outBuffer[10] = T1[temp[0][2]][1];
-    outBuffer[11] = T1[temp[1][3]][1];
-    outBuffer[12] = T1[temp[3][0]][1];
-    outBuffer[13] = T1[temp[0][1]][1];
-    outBuffer[14] = T1[temp[1][2]][1];
-    outBuffer[15] = T1[temp[2][3]][1];
+    outBuffer[ 0] = Tables.T1[temp[0][0]][1];
+    outBuffer[ 1] = Tables.T1[temp[1][1]][1];
+    outBuffer[ 2] = Tables.T1[temp[2][2]][1];
+    outBuffer[ 3] = Tables.T1[temp[3][3]][1];
+    outBuffer[ 4] = Tables.T1[temp[1][0]][1];
+    outBuffer[ 5] = Tables.T1[temp[2][1]][1];
+    outBuffer[ 6] = Tables.T1[temp[3][2]][1];
+    outBuffer[ 7] = Tables.T1[temp[0][3]][1];
+    outBuffer[ 8] = Tables.T1[temp[2][0]][1];
+    outBuffer[ 9] = Tables.T1[temp[3][1]][1];
+    outBuffer[10] = Tables.T1[temp[0][2]][1];
+    outBuffer[11] = Tables.T1[temp[1][3]][1];
+    outBuffer[12] = Tables.T1[temp[3][0]][1];
+    outBuffer[13] = Tables.T1[temp[0][1]][1];
+    outBuffer[14] = Tables.T1[temp[1][2]][1];
+    outBuffer[15] = Tables.T1[temp[2][3]][1];
     Xor128(outBuffer,outBuffer,m_expandedKey[m_uRounds]);
     prevBlock=outBuffer;
 
@@ -337,37 +373,37 @@ void Rijndael::blockDecrypt(const byte *input, size_t inputLen, byte *outBuffer)
     
     Xor128(temp,input,m_expandedKey[m_uRounds]);
 
-    Xor128(block,   T5[temp[0][0]],T6[temp[3][1]],T7[temp[2][2]],T8[temp[1][3]]);
-    Xor128(block+4, T5[temp[1][0]],T6[temp[0][1]],T7[temp[3][2]],T8[temp[2][3]]);
-    Xor128(block+8, T5[temp[2][0]],T6[temp[1][1]],T7[temp[0][2]],T8[temp[3][3]]);
-    Xor128(block+12,T5[temp[3][0]],T6[temp[2][1]],T7[temp[1][2]],T8[temp[0][3]]);
+    Xor128(block,   Tables.T5[temp[0][0]],Tables.T6[temp[3][1]],Tables.T7[temp[2][2]],Tables.T8[temp[1][3]]);
+    Xor128(block+4, Tables.T5[temp[1][0]],Tables.T6[temp[0][1]],Tables.T7[temp[3][2]],Tables.T8[temp[2][3]]);
+    Xor128(block+8, Tables.T5[temp[2][0]],Tables.T6[temp[1][1]],Tables.T7[temp[0][2]],Tables.T8[temp[3][3]]);
+    Xor128(block+12,Tables.T5[temp[3][0]],Tables.T6[temp[2][1]],Tables.T7[temp[1][2]],Tables.T8[temp[0][3]]);
 
     for(int r = m_uRounds-1; r > 1; r--)
     {
       Xor128(temp,block,m_expandedKey[r]);
-      Xor128(block,   T5[temp[0][0]],T6[temp[3][1]],T7[temp[2][2]],T8[temp[1][3]]);
-      Xor128(block+4, T5[temp[1][0]],T6[temp[0][1]],T7[temp[3][2]],T8[temp[2][3]]);
-      Xor128(block+8, T5[temp[2][0]],T6[temp[1][1]],T7[temp[0][2]],T8[temp[3][3]]);
-      Xor128(block+12,T5[temp[3][0]],T6[temp[2][1]],T7[temp[1][2]],T8[temp[0][3]]);
+      Xor128(block,   Tables.T5[temp[0][0]],Tables.T6[temp[3][1]],Tables.T7[temp[2][2]],Tables.T8[temp[1][3]]);
+      Xor128(block+4, Tables.T5[temp[1][0]],Tables.T6[temp[0][1]],Tables.T7[temp[3][2]],Tables.T8[temp[2][3]]);
+      Xor128(block+8, Tables.T5[temp[2][0]],Tables.T6[temp[1][1]],Tables.T7[temp[0][2]],Tables.T8[temp[3][3]]);
+      Xor128(block+12,Tables.T5[temp[3][0]],Tables.T6[temp[2][1]],Tables.T7[temp[1][2]],Tables.T8[temp[0][3]]);
     }
    
     Xor128(temp,block,m_expandedKey[1]);
-    block[ 0] = S5[temp[0][0]];
-    block[ 1] = S5[temp[3][1]];
-    block[ 2] = S5[temp[2][2]];
-    block[ 3] = S5[temp[1][3]];
-    block[ 4] = S5[temp[1][0]];
-    block[ 5] = S5[temp[0][1]];
-    block[ 6] = S5[temp[3][2]];
-    block[ 7] = S5[temp[2][3]];
-    block[ 8] = S5[temp[2][0]];
-    block[ 9] = S5[temp[1][1]];
-    block[10] = S5[temp[0][2]];
-    block[11] = S5[temp[3][3]];
-    block[12] = S5[temp[3][0]];
-    block[13] = S5[temp[2][1]];
-    block[14] = S5[temp[1][2]];
-    block[15] = S5[temp[0][3]];
+    block[ 0] = Tables.S5[temp[0][0]];
+    block[ 1] = Tables.S5[temp[3][1]];
+    block[ 2] = Tables.S5[temp[2][2]];
+    block[ 3] = Tables.S5[temp[1][3]];
+    block[ 4] = Tables.S5[temp[1][0]];
+    block[ 5] = Tables.S5[temp[0][1]];
+    block[ 6] = Tables.S5[temp[3][2]];
+    block[ 7] = Tables.S5[temp[2][3]];
+    block[ 8] = Tables.S5[temp[2][0]];
+    block[ 9] = Tables.S5[temp[1][1]];
+    block[10] = Tables.S5[temp[0][2]];
+    block[11] = Tables.S5[temp[3][3]];
+    block[12] = Tables.S5[temp[3][0]];
+    block[13] = Tables.S5[temp[2][1]];
+    block[14] = Tables.S5[temp[1][2]];
+    block[15] = Tables.S5[temp[0][3]];
     Xor128(block,block,m_expandedKey[0]);
 
     if (CBCMode)
@@ -537,49 +573,11 @@ void Rijndael::keyEncToDec()
       for (int j = 0; j < 4; j++)
       {
         byte *w=m_expandedKey[r][j];
-        n_expandedKey[j][i]=U1[w[0]][i]^U2[w[1]][i]^U3[w[2]][i]^U4[w[3]][i];
+        n_expandedKey[j][i]=Tables.U1[w[0]][i]^Tables.U2[w[1]][i]^Tables.U3[w[2]][i]^Tables.U4[w[3]][i];
       }
     memcpy(m_expandedKey[r],n_expandedKey,sizeof(m_expandedKey[0]));
   }
 } 
-
-
-static byte gmul(byte a, byte b) // Galois field "peasant's algorithm" multiplication.
-{
-  const byte poly=0x1b; // Lower byte of AES 0x11b irreducible polynomial.
-  byte result = 0;
-  while (b>0)
-  {
-    if ((b & 1) != 0) 
-      result ^= a;
-    a = (a & 0x80) ? (a<<1)^poly : a<<1;
-    b >>= 1;
-  }
-  return result;
-}
-
-
-// 2021-09-24: changed to slower and simpler code without interim tables.
-// It is still fast enough for our purpose.
-void Rijndael::GenerateTables()
-{
-  for (int I=0;I<256;I++)
-    S5[S[I]]=I;
-
-  for (int I=0;I<256;I++)
-  {   
-    byte s=S[I];
-    T1[I][1]=T1[I][2]=T2[I][2]=T2[I][3]=T3[I][0]=T3[I][3]=T4[I][0]=T4[I][1]=s;
-    T1[I][0]=T2[I][1]=T3[I][2]=T4[I][3]=gmul(s,2);
-    T1[I][3]=T2[I][0]=T3[I][1]=T4[I][2]=gmul(s,3);
-
-    byte b=S5[I];
-    U1[b][3]=U2[b][0]=U3[b][1]=U4[b][2]=T5[I][3]=T6[I][0]=T7[I][1]=T8[I][2]=gmul(b,0xb);
-    U1[b][1]=U2[b][2]=U3[b][3]=U4[b][0]=T5[I][1]=T6[I][2]=T7[I][3]=T8[I][0]=gmul(b,0x9);
-    U1[b][2]=U2[b][3]=U3[b][0]=U4[b][1]=T5[I][2]=T6[I][3]=T7[I][0]=T8[I][1]=gmul(b,0xd);
-    U1[b][0]=U2[b][1]=U3[b][2]=U4[b][3]=T5[I][0]=T6[I][1]=T7[I][2]=T8[I][3]=gmul(b,0xe);
-  }
-}
 
 
 #if 0

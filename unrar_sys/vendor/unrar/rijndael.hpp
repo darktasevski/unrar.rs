@@ -39,7 +39,6 @@ class Rijndael
 
     void keySched(byte key[_MAX_KEY_COLUMNS][4]);
     void keyEncToDec();
-    void GenerateTables();
 
     // RAR always uses CBC, but we may need to turn it off when calling
     // this code from other archive formats with CTR and other modes.

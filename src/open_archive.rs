@@ -10,6 +10,8 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
+mod bounded;
+
 bitflags::bitflags! {
     #[derive(Debug, Default)]
     struct ArchiveFlags: u32 {
@@ -45,11 +47,40 @@ impl Drop for Handle {
     }
 }
 
-// SAFETY: Handle is only ever accessed by one thread at a time.
-// Ownership is transferred to the producer thread, never shared.
-// The C++ unrar library uses handle-scoped state, not thread-local storage
-// (verified: C++ TLS audit passed for vendored unrar v7.1 / DLL version 7).
-// Re-verify if the vendored C++ source is updated.
+impl Handle {
+    // The callback must interpret userdata as T. The native call must settle
+    // every callback before returning so the stack borrow ends on this thread.
+    unsafe fn with_callback<T, R>(
+        &self,
+        callback: native::Callback,
+        state: &mut T,
+        call: impl FnOnce(*const native::Handle) -> R,
+    ) -> R {
+        struct Registration(NonNull<native::Handle>);
+        impl Drop for Registration {
+            fn drop(&mut self) {
+                unsafe { native::RARSetCallback(self.0.as_ptr(), None, 0) };
+            }
+        }
+        unsafe {
+            native::RARSetCallback(
+                self.0.as_ptr(),
+                Some(callback),
+                state as *mut T as native::LPARAM,
+            )
+        };
+        let _registration = Registration(self.0);
+        call(self.0.as_ptr())
+    }
+
+    fn close(self) -> Code {
+        let handle = std::mem::ManuallyDrop::new(self);
+        Code::from_status(unsafe { native::RARCloseArchive(handle.0.as_ptr()) })
+    }
+}
+
+// SAFETY: ownership moves between threads; access is exclusive, and each native
+// operation unregisters its borrowed callback state before the handle can move.
 unsafe impl Send for Handle {}
 
 /// An open RAR archive that can be read or processed.
@@ -63,7 +94,6 @@ pub struct OpenArchive<M: OpenMode, C: Cursor> {
     extra: C,
     marker: std::marker::PhantomData<M>,
 }
-type Userdata<T> = (T, Option<widestring::WideCString>);
 
 mod private {
     use super::native;
@@ -243,6 +273,10 @@ impl<Mode: OpenMode> OpenArchive<Mode, CursorBeforeHeader> {
         password: Option<&[u8]>,
         recover: Option<&mut Option<Self>>,
     ) -> UnrarResult<Self> {
+        let password = password
+            .map(std::ffi::CString::new)
+            .transpose()
+            .map_err(|_| UnrarError::from(Code::BadPassword, When::Open))?;
         let filename = pathed::construct(filename);
 
         let mut data =
@@ -251,9 +285,8 @@ impl<Mode: OpenMode> OpenArchive<Mode, CursorBeforeHeader> {
             NonNull::new(unsafe { native::RAROpenArchiveEx(&mut data as *mut _) } as *mut _);
 
         let arc = handle.and_then(|handle| {
-            if let Some(pw) = password {
-                let cpw = std::ffi::CString::new(pw).unwrap();
-                unsafe { native::RARSetPassword(handle.as_ptr(), cpw.as_ptr() as *const _) }
+            if let Some(password) = password {
+                unsafe { native::RARSetPassword(handle.as_ptr(), password.as_ptr() as *const _) }
             }
             Some(OpenArchive {
                 handle: Handle(handle),
@@ -263,7 +296,7 @@ impl<Mode: OpenMode> OpenArchive<Mode, CursorBeforeHeader> {
                 marker: std::marker::PhantomData,
             })
         });
-        let result = Code::from(data.open_result as i32).unwrap();
+        let result = Code::from_status(data.open_result as i32);
 
         match (arc, result) {
             (Some(arc), Code::Success) => Ok(arc),
@@ -376,17 +409,18 @@ impl<M: OpenMode> OpenArchive<M, CursorBeforeFile> {
         path: Option<&pathed::RarStr>,
         file: Option<&pathed::RarStr>,
     ) -> UnrarResult<(PM::Output, OpenArchive<M, CursorBeforeHeader>)> {
-        let result = Ok((
-            Internal::<PM>::process_file_raw(&self.handle, path, file)?,
-            OpenArchive {
-                extra: CursorBeforeHeader,
-                damaged: self.damaged,
-                handle: self.handle,
-                flags: self.flags,
-                marker: std::marker::PhantomData,
-            },
-        ));
-        result
+        let output = Internal::<PM>::process_file_raw(&self.handle, path, file)?;
+        Ok((output, self.next_header()))
+    }
+
+    fn next_header(self) -> OpenArchive<M, CursorBeforeHeader> {
+        OpenArchive {
+            extra: CursorBeforeHeader,
+            damaged: self.damaged,
+            handle: self.handle,
+            flags: self.flags,
+            marker: std::marker::PhantomData,
+        }
     }
 }
 
@@ -476,30 +510,18 @@ impl OpenArchive<Process, CursorBeforeFile> {
             .name("unrar-streaming-producer".into())
             .stack_size(512 * 1024)
             .spawn(move || {
-                let mut userdata = StreamingUserdata {
-                    streaming: StreamingState {
-                        sender,
-                        abort: abort_clone,
-                        discard: discard_clone,
-                        decompressed_bytes: decompressed_bytes_clone,
-                    },
-                    volume: None,
+                let mut state = StreamingState {
+                    sender,
+                    abort: abort_clone,
+                    discard: discard_clone,
+                    decompressed_bytes: decompressed_bytes_clone,
                 };
-                unsafe {
-                    native::RARSetCallback(
-                        handle.0.as_ptr(),
-                        Some(streaming_callback),
-                        &mut userdata as *mut _ as native::LPARAM,
-                    );
-                }
-                let process_result = Code::from(pathed::process_file(
-                    handle.0.as_ptr(),
-                    private::Operation::Test as i32,
-                    None,
-                    None,
-                ))
-                .unwrap();
-                let tx = &userdata.streaming.sender;
+                let process_result = Code::from_status(unsafe {
+                    handle.with_callback(streaming_callback, &mut state, |raw| {
+                        pathed::process_file(raw, private::Operation::Test as i32, None, None)
+                    })
+                });
+                let tx = &state.sender;
                 match process_result {
                     Code::Success => {
                         let _ = tx.send(StreamMessage::Done);
@@ -528,18 +550,12 @@ impl OpenArchive<Process, CursorBeforeFile> {
 }
 
 fn read_header(handle: &Handle) -> UnrarResult<Option<FileHeader>> {
-    let mut userdata: Userdata<<Skip as ProcessMode>::Output> = Default::default();
-    unsafe {
-        native::RARSetCallback(
-            handle.0.as_ptr(),
-            Some(Internal::<Skip>::callback),
-            &mut userdata as *mut _ as native::LPARAM,
-        );
-    }
     let mut header = native::HeaderDataEx::default();
-    let read_result =
-        Code::from(unsafe { native::RARReadHeaderEx(handle.0.as_ptr(), &mut header as *mut _) })
-            .unwrap();
+    let read_result = Code::from_status(unsafe {
+        handle.with_callback(Internal::<Skip>::callback, &mut (), |raw| {
+            native::RARReadHeaderEx(raw, &mut header as *mut _)
+        })
+    });
     match read_result {
         Code::Success => Ok(Some(header.into())),
         Code::EndArchive => Ok(None),
@@ -589,15 +605,7 @@ impl ProcessMode for Test {
     fn process_data(_: &mut Self::Output, _: &[u8]) {}
 }
 
-/// Shared volume-change handler used by both the existing and streaming callbacks.
-fn handle_volume_change(
-    volume: &mut Option<widestring::WideCString>,
-    p1: native::LPARAM,
-    p2: native::LPARAM,
-) -> c_int {
-    *volume = Some(unsafe { widestring::WideCString::from_ptr_truncate(p1 as *const _, 2048) });
-    // p2 carries RAR_VOL_ASK (0) or RAR_VOL_NOTIFY (1)
-    // Return -1 for ASK (next volume not found), 0 otherwise
+fn handle_volume_change(p2: native::LPARAM) -> c_int {
     if p2 == native::RAR_VOL_ASK {
         -1
     } else {
@@ -614,11 +622,11 @@ extern "C" fn streaming_callback(
     if user_data == 0 {
         return -1;
     }
-    let state = unsafe { &mut *(user_data as *mut StreamingUserdata) };
+    let state = unsafe { &mut *(user_data as *mut StreamingState) };
     match msg {
-        native::UCM_CHANGEVOLUMEW => handle_volume_change(&mut state.volume, p1, p2),
+        native::UCM_CHANGEVOLUMEW => handle_volume_change(p2),
         native::UCM_PROCESSDATA => {
-            if state.streaming.abort.load(Ordering::Relaxed) {
+            if state.abort.load(Ordering::Relaxed) {
                 return -1;
             }
             if p2 <= 0 {
@@ -628,22 +636,20 @@ extern "C" fn streaming_callback(
             // Count every byte the C library decompresses, regardless of
             // whether we send it, discard it, or abort.
             state
-                .streaming
                 .decompressed_bytes
                 .fetch_add(len as u64, Ordering::Relaxed);
-            if state.streaming.discard.load(Ordering::Relaxed) {
+            if state.discard.load(Ordering::Relaxed) {
                 return 0;
             }
             let mut offset = 0;
             while offset < len {
-                if state.streaming.abort.load(Ordering::Relaxed) {
+                if state.abort.load(Ordering::Relaxed) {
                     return -1;
                 }
                 let chunk_len = (len - offset).min(MAX_CHUNK_SIZE);
                 let chunk =
                     unsafe { std::slice::from_raw_parts((p1 as *const u8).add(offset), chunk_len) };
                 if state
-                    .streaming
                     .sender
                     .send(StreamMessage::Chunk(chunk.to_vec()))
                     .is_err()
@@ -675,11 +681,6 @@ struct StreamingState {
     /// Total bytes delivered by the C library via UCM_PROCESSDATA callbacks,
     /// regardless of whether they were sent, discarded, or aborted.
     decompressed_bytes: Arc<AtomicU64>,
-}
-
-struct StreamingUserdata {
-    streaming: StreamingState,
-    volume: Option<widestring::WideCString>,
 }
 
 /// A streaming reader for a single RAR archive entry.
@@ -859,9 +860,9 @@ impl<M: ProcessMode> Internal<M> {
         if user_data == 0 {
             return 0;
         }
-        let user_data = unsafe { &mut *(user_data as *mut Userdata<M::Output>) };
+        let user_data = unsafe { &mut *(user_data as *mut M::Output) };
         match msg {
-            native::UCM_CHANGEVOLUMEW => handle_volume_change(&mut user_data.1, p1, p2),
+            native::UCM_CHANGEVOLUMEW => handle_volume_change(p2),
             native::UCM_PROCESSDATA => {
                 if p2 <= 0 {
                     return 0; // Ignore zero/negative-length chunks
@@ -874,7 +875,7 @@ impl<M: ProcessMode> Internal<M> {
                         unsafe { (p1 as *const u8).add(offset) },
                         chunk_len,
                     );
-                    M::process_data(&mut user_data.0, unsafe { &*raw_slice as &_ });
+                    M::process_data(user_data, unsafe { &*raw_slice as &_ });
                     offset += chunk_len;
                 }
                 0
@@ -888,23 +889,14 @@ impl<M: ProcessMode> Internal<M> {
         path: Option<&pathed::RarStr>,
         file: Option<&pathed::RarStr>,
     ) -> UnrarResult<M::Output> {
-        let mut user_data: Userdata<M::Output> = Default::default();
-        unsafe {
-            native::RARSetCallback(
-                handle.0.as_ptr(),
-                Some(Self::callback),
-                &mut user_data as *mut _ as native::LPARAM,
-            );
-        }
-        let process_result = Code::from(pathed::process_file(
-            handle.0.as_ptr(),
-            M::OPERATION as i32,
-            path,
-            file,
-        ))
-        .unwrap();
+        let mut output = M::Output::default();
+        let process_result = Code::from_status(unsafe {
+            handle.with_callback(Self::callback, &mut output, |raw| {
+                pathed::process_file(raw, M::OPERATION as i32, path, file)
+            })
+        });
         match process_result {
-            Code::Success => Ok(user_data.0),
+            Code::Success => Ok(output),
             _ => Err(UnrarError::from(process_result, When::Process)),
         }
     }
@@ -1034,15 +1026,11 @@ mod tests {
         let abort = Arc::new(AtomicBool::new(false));
         let discard = Arc::new(AtomicBool::new(false));
         let decompressed_bytes = Arc::new(AtomicU64::new(0));
-        let streaming = StreamingState {
+        let mut user_data = StreamingState {
             sender,
             abort,
             discard,
             decompressed_bytes: decompressed_bytes.clone(),
-        };
-        let mut user_data = StreamingUserdata {
-            streaming,
-            volume: None,
         };
 
         let result = streaming_callback(
@@ -1074,7 +1062,7 @@ mod tests {
     #[test]
     fn process_callback_accepts_process_data_larger_than_transport_chunk() {
         let payload = vec![0x5A; MAX_CHUNK_SIZE + 23];
-        let mut user_data: Userdata<Vec<u8>> = Default::default();
+        let mut user_data: Vec<u8> = Default::default();
 
         let result = Internal::<ReadToVec>::callback(
             native::UCM_PROCESSDATA,
@@ -1084,6 +1072,6 @@ mod tests {
         );
 
         assert_eq!(result, 0);
-        assert_eq!(user_data.0, payload);
+        assert_eq!(user_data, payload);
     }
 }

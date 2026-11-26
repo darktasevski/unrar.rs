@@ -1,0 +1,11 @@
+[package]
+name = "unrar-native-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[build-dependencies]
+cc = "1"

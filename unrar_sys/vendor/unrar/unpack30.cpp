@@ -17,23 +17,28 @@ void Unpack::Unpack29(bool Solid)
 {
   static unsigned char LDecode[]={0,1,2,3,4,5,6,7,8,10,12,14,16,20,24,28,32,40,48,56,64,80,96,112,128,160,192,224};
   static unsigned char LBits[]=  {0,0,0,0,0,0,0,0,1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4,  4,  5,  5,  5,  5};
-  static int DDecode[DC30];
-  static byte DBits[DC30];
-  static int DBitLengthCounts[]= {4,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,14,0,12};
   static unsigned char SDDecode[]={0,4,8,16,32,64,128,192};
   static unsigned char SDBits[]=  {2,2,3, 4, 5, 6,  6,  6};
   unsigned int Bits;
 
-  if (DDecode[1]==0)
+  struct DistanceTable
   {
-    int Dist=0,BitLength=0,Slot=0;
-    for (int I=0;I<ASIZE(DBitLengthCounts);I++,BitLength++)
-      for (int J=0;J<DBitLengthCounts[I];J++,Slot++,Dist+=(1<<BitLength))
-      {
-        DDecode[Slot]=Dist;
-        DBits[Slot]=BitLength;
-      }
-  }
+    int Decode[DC30]{};
+    byte Bits[DC30]{};
+    constexpr DistanceTable()
+    {
+      constexpr int SlotsPerBitLength[]={4,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,14,0,12};
+      int Dist=0,Slot=0;
+      for (int Length=0;Length<ASIZE(SlotsPerBitLength);Length++)
+        for (int J=0;J<SlotsPerBitLength[Length];J++)
+        {
+          Decode[Slot]=Dist;
+          Bits[Slot++]=Length;
+          Dist+=1<<Length;
+        }
+    }
+  };
+  static constexpr DistanceTable Distances{};
 
   FileExtracted=true;
 
@@ -152,8 +157,8 @@ void Unpack::Unpack29(bool Solid)
       }
 
       uint DistNumber=DecodeNumber(Inp,&BlockTables.DD);
-      uint Distance=DDecode[DistNumber]+1;
-      if ((Bits=DBits[DistNumber])>0)
+      uint Distance=Distances.Decode[DistNumber]+1;
+      if ((Bits=Distances.Bits[DistNumber])>0)
       {
         if (DistNumber>9)
         {

@@ -31,6 +31,7 @@ pub enum Code {
     // record without its source file.
     EReference = native::ERAR_EREFERENCE,
     BadPassword = native::ERAR_BAD_PASSWORD,
+    LargeDict = native::ERAR_LARGE_DICT,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -41,6 +42,10 @@ pub enum When {
 }
 
 impl Code {
+    pub(crate) fn from_status(raw: i32) -> Self {
+        Self::from(raw).unwrap_or(Self::Unknown)
+    }
+
     pub fn from(code: i32) -> Option<Self> {
         use Code::*;
         match code {
@@ -60,6 +65,7 @@ impl Code {
             native::ERAR_MISSING_PASSWORD => Some(MissingPassword),
             native::ERAR_EREFERENCE => Some(EReference),
             native::ERAR_BAD_PASSWORD => Some(BadPassword),
+            native::ERAR_LARGE_DICT => Some(LargeDict),
             _ => None,
         }
     }
@@ -102,6 +108,7 @@ impl fmt::Display for UnrarError {
             (MissingPassword, _) => write!(f, "Password for encrypted archive not specified"),
             (EReference, _) => write!(f, "Cannot open file source for reference record"),
             (BadPassword, _) => write!(f, "Wrong password was specified"),
+            (LargeDict, _) => write!(f, "Dictionary exceeds the allowed size"),
             (Unknown, _) => write!(f, "Unknown error"),
             (EndArchive, _) => write!(f, "Archive end"),
             (Success, _) => write!(f, "Success"),
@@ -141,5 +148,32 @@ impl<C> From<widestring::error::ContainsNul<C>> for NulError {
 impl From<ffi::NulError> for NulError {
     fn from(e: ffi::NulError) -> NulError {
         NulError(e.nul_position())
+    }
+}
+
+/// Failure to read a complete primary entry into a bounded buffer.
+#[derive(Debug, PartialEq)]
+pub enum BoundedReadError {
+    /// The decompressor delivered more primary-entry bytes than allowed.
+    LimitExceeded,
+    /// Archive processing, allocation or closure failed.
+    Archive(UnrarError),
+}
+
+impl fmt::Display for BoundedReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LimitExceeded => f.write_str("Entry exceeds the output limit"),
+            Self::Archive(error) => error.fmt(f),
+        }
+    }
+}
+
+impl error::Error for BoundedReadError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            Self::LimitExceeded => None,
+            Self::Archive(error) => Some(error),
+        }
     }
 }

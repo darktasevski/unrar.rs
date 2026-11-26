@@ -1,6 +1,6 @@
 #include "rar.hpp"
 
-CmdExtract::CmdExtract(CommandData *Cmd)
+CmdExtract::CmdExtract(CommandData *Cmd): DataIO(ComprDataIO::Output::PrimaryFile)
 {
   CmdExtract::Cmd=Cmd;
 
@@ -56,7 +56,6 @@ void CmdExtract::DoExtract()
   Fat32=NotFat32=false;
 #endif
   SuppressNoFilesMessage=false;
-  DataIO.SetCurrentCommand(Cmd->Command[0]);
 
   if (Cmd->UseStdin.empty())
   {
@@ -399,7 +398,7 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
   if (MatchFound && !EqualNames)
     AllMatchesExact=false;
 
-  Arc.ConvertAttributes();
+  Arc.ConvertAttributes(Command);
 
 #if !defined(SFX_MODULE) && !defined(RARDLL)
   if (Arc.FileHead.SplitBefore && FirstFile && !UseExactVolName)

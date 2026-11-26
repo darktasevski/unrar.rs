@@ -27,6 +27,15 @@ fn no_password() {
 }
 
 #[test]
+fn password_with_embedded_nul_is_rejected() {
+    let result = Archive::with_password("data/crypted.rar", b"unrar\0extra").open_for_processing();
+    let error = result
+        .err()
+        .expect("password with an embedded NUL must fail");
+    assert_eq!((error.code, error.when), (Code::BadPassword, When::Open));
+}
+
+#[test]
 fn version_cat() {
     let file = Archive::with_password("data/crypted.rar", "unrar")
         .open_for_processing()

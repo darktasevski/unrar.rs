@@ -7,7 +7,7 @@ mod archive;
 pub mod error;
 mod open_archive;
 mod pathed;
-pub use error::UnrarResult;
+pub use error::{BoundedReadError, UnrarResult};
 pub use open_archive::{
     CursorBeforeFile, CursorBeforeHeader, FileHeader, List, ListSplit, OpenArchive, Process,
     StreamingEntry, VolumeInfo,

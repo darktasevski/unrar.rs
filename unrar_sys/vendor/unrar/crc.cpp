@@ -23,7 +23,19 @@
 static uint crc_tables[16][256]; // Tables for Slicing-by-16.
 
 #ifdef USE_NEON_CRC32
-static bool CRC_Neon;
+static bool DetectNeonCRC32()
+{
+#ifdef _APPLE
+  uint Value=0;
+  size_t Size=sizeof(Value);
+  int RetCode=sysctlbyname("hw.optional.armv8_crc32",&Value,&Size,NULL,0);
+  return RetCode==0 && Value!=0;
+#else
+  return (getauxval(AT_HWCAP) & HWCAP_CRC32)!=0;
+#endif
+}
+
+static const bool CRC_Neon=DetectNeonCRC32();
 #endif
 
 
@@ -40,19 +52,6 @@ void InitCRC32(uint *CRCTab)
       C=(C & 1) ? (C>>1)^0xEDB88320 : (C>>1);
     CRCTab[I]=C;
   }
-
-#ifdef USE_NEON_CRC32
-  #ifdef _APPLE
-    // getauxval isn't available in OS X
-    uint Value=0;
-    size_t Size=sizeof(Value);
-    int RetCode=sysctlbyname("hw.optional.armv8_crc32",&Value,&Size,NULL,0);
-    CRC_Neon=RetCode==0 && Value!=0;
-  #else
-    CRC_Neon=(getauxval(AT_HWCAP) & HWCAP_CRC32)!=0;
-  #endif
-#endif
-
 }
 
 
